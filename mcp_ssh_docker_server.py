@@ -23,7 +23,7 @@ TOOL_METADATA = {
     "name": "docker_mcp_server",
     "version": VERSION,
     "description": "SSH and Docker command execution server",
-    "author": "Your Name",
+    "author": "Ariel S. Weher",
     "capabilities": ["ssh_exec", "docker_exec"]
 }
 
@@ -172,7 +172,7 @@ async def stream_ssh_command(
             duration=duration,
             metadata={"bytes_read": bytes_read}
         )
-        yield JsonContent(type="json", data=result.dict())
+        yield JsonContent(type="json", data=result.model_dump())
         
     except socket.timeout:
         raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds")
@@ -271,9 +271,10 @@ async def list_tools() -> list[Tool]:
     ]
 
 @app.call_tool()
-async def call_tool(name: str, args: dict) -> list[ContentType]:
+async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
     if name not in ["ssh_exec", "ssh_exec_docker"]:
-        raise ValueError(f"Unsupported tool: {name}")
+        yield TextContent(type="text", text=f"Unsupported tool: {name}")
+        return
 
     ssh = None
     cancellation_event = asyncio.Event()
@@ -286,7 +287,8 @@ async def call_tool(name: str, args: dict) -> list[ContentType]:
             structured_output = args.get("structured_output", False)
 
             if not cmd:
-                raise ValueError("Command field is required")
+                yield TextContent(type="text", text="Command field is required")
+                return
 
             ssh = ssh_connect()
             args_quoted = " ".join(shlex.quote(arg) for arg in cmd_args)
@@ -313,14 +315,16 @@ async def call_tool(name: str, args: dict) -> list[ContentType]:
                     stdout=out,
                     stderr=err
                 )
-                return [JsonContent(type="json", data=result.dict())]
+                yield JsonContent(type="json", data=result.model_dump())
+                return
             
             result = f"$ {final_command}\n"
             result += f"(exit code {exit_code})\n\n"
             result += out or ""
             if err:
                 result += f"\n[stderr]\n{err}"
-            return [TextContent(type="text", text=result)]
+            yield TextContent(type="text", text=result)
+            return
 
         # ssh_exec_docker logic
         list_containers_flag = args.get("list_containers", False)
@@ -328,10 +332,13 @@ async def call_tool(name: str, args: dict) -> list[ContentType]:
             try:
                 containers = list_containers()
                 if args.get("structured_output", False):
-                    return [JsonContent(type="json", data={"containers": containers})]
-                return [TextContent(type="text", text="Available containers:\n" + "\n".join(containers))]
+                    yield JsonContent(type="json", data={"containers": containers})
+                else:
+                    yield TextContent(type="text", text="Available containers:\n" + "\n".join(containers))
+                return
             except SSHError as e:
-                return [TextContent(type="text", text=f"Error listing containers: {str(e)}")]
+                yield TextContent(type="text", text=f"Error listing containers: {str(e)}")
+                return
 
         container = args.get("container")
         cmd = args.get("command")
@@ -340,7 +347,8 @@ async def call_tool(name: str, args: dict) -> list[ContentType]:
         structured_output = args.get("structured_output", False)
 
         if not all([container, cmd]):
-            raise ValueError("Both 'container' and 'command' fields are required")
+            yield TextContent(type="text", text="Both 'container' and 'command' fields are required")
+            return
 
         ssh = ssh_connect()
         args_quoted = " ".join(shlex.quote(arg) for arg in cmd_args)
@@ -368,21 +376,23 @@ async def call_tool(name: str, args: dict) -> list[ContentType]:
                 stderr=err,
                 metadata={"container": container}
             )
-            return [JsonContent(type="json", data=result.dict())]
+            yield JsonContent(type="json", data=result.model_dump())
+            return
         
         result = f"$ {final_command}\n"
         result += f"(exit code {exit_code})\n\n"
         result += out or ""
         if err:
             result += f"\n[stderr]\n{err}"
-        return [TextContent(type="text", text=result)]
+        yield TextContent(type="text", text=result)
+        return
 
     except CommandCancelled as e:
-        return [TextContent(type="text", text=f"Command cancelled: {str(e)}")]
+        yield TextContent(type="text", text=f"Command cancelled: {str(e)}")
     except SSHError as e:
-        return [TextContent(type="text", text=f"SSH Error: {str(e)}")]
+        yield TextContent(type="text", text=f"SSH Error: {str(e)}")
     except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
+        yield TextContent(type="text", text=f"Error: {str(e)}")
     finally:
         if ssh:
             ssh.close()
