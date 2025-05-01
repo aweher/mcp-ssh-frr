@@ -1,13 +1,13 @@
 import asyncio
+import io
 import logging
 import os
-import sys
-import io
-import paramiko
 import shlex
 import socket
-import json
-from typing import Optional, Tuple, AsyncGenerator, Dict, Any, Union
+import sys
+from typing import Tuple, AsyncGenerator, Dict, Any, Union
+
+import paramiko
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 from mcp.server.stdio import stdio_server
@@ -36,7 +36,7 @@ STREAM_MAX_TIME = 300  # 5 minutes maximum for streaming commands
 # Fixed private key
 PRIVATE_KEY_PATH = "./config/id_rsa"
 
-with open(PRIVATE_KEY_PATH, "r") as key_file:
+with open(PRIVATE_KEY_PATH, "r", encoding="utf-8") as key_file:
     PRIVATE_KEY = key_file.read()
 
 # Initialize MCP server
@@ -99,16 +99,16 @@ def ssh_connect() -> paramiko.SSHClient:
             auth_timeout=SSH_TIMEOUT
         )
         return ssh
-    except paramiko.AuthenticationException:
-        raise SSHError("Authentication failed. Check your SSH credentials.")
+    except paramiko.AuthenticationException as exc:
+        raise SSHError("Authentication failed. Check your SSH credentials.") from exc
     except paramiko.SSHException as e:
-        raise SSHError(f"SSH error: {str(e)}")
-    except socket.timeout:
-        raise SSHError(f"Connection timed out after {SSH_TIMEOUT} seconds")
+        raise SSHError(f"SSH error: {str(e)}") from e
+    except socket.timeout as exc:
+        raise SSHError(f"Connection timed out after {SSH_TIMEOUT} seconds") from exc
     except socket.error as e:
-        raise SSHError(f"Network error: {str(e)}")
+        raise SSHError(f"Network error: {str(e)}") from e
     except Exception as e:
-        raise SSHError(f"Unexpected error: {str(e)}")
+        raise SSHError(f"Unexpected error: {str(e)}") from e
 
 async def stream_ssh_command(
     ssh: paramiko.SSHClient, 
@@ -174,10 +174,10 @@ async def stream_ssh_command(
         )
         yield JsonContent(type="json", data=result.model_dump())
         
-    except socket.timeout:
-        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds")
+    except socket.timeout as exc:
+        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds") from exc
     except Exception as e:
-        raise SSHError(f"Command execution failed: {str(e)}")
+        raise SSHError(f"Command execution failed: {str(e)}") from e
 
 def execute_ssh_command(ssh: paramiko.SSHClient, command: str) -> Tuple[str, str, int]:
     """Execute a command via SSH with timeout and return (stdout, stderr, exit_code)"""
@@ -187,10 +187,10 @@ def execute_ssh_command(ssh: paramiko.SSHClient, command: str) -> Tuple[str, str
         out = stdout.read().decode()
         err = stderr.read().decode()
         return out, err, exit_code
-    except socket.timeout:
-        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds")
+    except socket.timeout as exc:
+        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds") from exc
     except Exception as e:
-        raise SSHError(f"Command execution failed: {str(e)}")
+        raise SSHError(f"Command execution failed: {str(e)}") from e
 
 def list_containers() -> list[str]:
     """Lists running Docker containers using docker ps"""
@@ -207,6 +207,7 @@ def list_containers() -> list[str]:
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:
+    """Returns a list of available tools with their metadata and input schemas."""
     return [
         Tool(
             name="ssh_exec_docker",
@@ -272,6 +273,7 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
+    """Executes the specified tool with given arguments and yields content as it becomes available."""
     if name not in ["ssh_exec", "ssh_exec_docker"]:
         yield TextContent(type="text", text=f"Unsupported tool: {name}")
         return
@@ -398,6 +400,7 @@ async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
             ssh.close()
 
 async def main():
+    """Initializes and runs the MCP server using stdio for communication."""
     print("Starting docker MCP server...", file=sys.stderr)
     async with stdio_server() as (reader, writer):
         await app.run(reader, writer, app.create_initialization_options())
