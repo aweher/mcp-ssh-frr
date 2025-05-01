@@ -4,6 +4,7 @@ setup(
     name="mcp-ssh-frr",
     version="1.0.0",
     packages=find_packages(),
+    py_modules=["mcp_ssh_docker_server"],
     install_requires=[
         "paramiko>=3.0.0",
         "pydantic>=2.0.0",
