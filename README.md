@@ -22,30 +22,35 @@ A Message Control Protocol (MCP) server that provides SSH and Docker command exe
 ## Installation
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/aweher/mcp-ssh-frr.git
 cd mcp-ssh-frr
 ```
 
 2. Create and activate a virtual environment:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 3. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 4. Configure SSH:
+
    - Place your SSH private key in `./config/id_rsa`
    - Set up environment variables:
      ```bash
      export SSH_HOST="your-remote-host"
-     export SSH_USER="your-username"
+     export SSH_USER="your-username" # Defaults to root
      export SSH_PORT="22"  # Optional, defaults to 22
      ```
+   - Don't forget to add your pubkey into `authorized_keys` file on `your-remote-host`
 
 ## Usage
 
@@ -104,6 +109,7 @@ List available containers:
 ### Output Formats
 
 1. Text Output (default):
+
 ```
 $ command arg1 arg2
 (exit code 0)
@@ -113,6 +119,7 @@ output line 2
 ```
 
 2. Structured JSON Output:
+
 ```json
 {
     "command": "command arg1 arg2",
@@ -127,6 +134,7 @@ output line 2
 ```
 
 3. Progress Updates (when streaming):
+
 ```
 [progress] 45% - Bytes read: 1024
 ```
@@ -146,6 +154,7 @@ output line 2
 ## Error Handling
 
 The server handles various error scenarios:
+
 - Connection timeouts
 - Authentication failures
 - Command execution errors

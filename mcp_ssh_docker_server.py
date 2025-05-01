@@ -5,13 +5,13 @@ import os
 import shlex
 import socket
 import sys
-from typing import Tuple, AsyncGenerator, Dict, Any, Union
+from typing import Tuple, AsyncGenerator, Dict, Any, Union, Optional
 
 import paramiko
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 from mcp.server.stdio import stdio_server
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,12 +32,10 @@ SSH_TIMEOUT = 10  # seconds
 COMMAND_TIMEOUT = 30  # seconds
 STREAM_BUFFER_SIZE = 1024  # bytes
 STREAM_MAX_TIME = 300  # 5 minutes maximum for streaming commands
+MAX_OUTPUT_SIZE = 1024 * 1024  # 1MB maximum output size
 
-# Fixed private key
+# Fixed private key path
 PRIVATE_KEY_PATH = "./config/id_rsa"
-
-with open(PRIVATE_KEY_PATH, "r", encoding="utf-8") as key_file:
-    PRIVATE_KEY = key_file.read()
 
 # Initialize MCP server
 app = Server("docker_mcp_server")
@@ -47,6 +45,13 @@ class ProgressContent(BaseModel):
     type: str = "progress"
     progress: int
     message: str
+
+    @field_validator('progress')
+    @classmethod
+    def validate_progress(cls, v: int) -> int:
+        if not 0 <= v <= 100:
+            raise ValueError('Progress must be between 0 and 100')
+        return v
 
 class JsonContent(BaseModel):
     """Content type for structured JSON output"""
@@ -62,9 +67,25 @@ class CommandResult(BaseModel):
     duration: float = 0.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator('exit_code')
+    @classmethod
+    def validate_exit_code(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError('Exit code cannot be negative')
+        return v
+
+    @field_validator('duration')
+    @classmethod
+    def validate_duration(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError('Duration cannot be negative')
+        return v
+
 class SSHError(Exception):
     """Custom exception for SSH-related errors"""
-    pass
+    def __init__(self, message: str, original_error: Optional[Exception] = None):
+        super().__init__(message)
+        self.original_error = original_error
 
 class CommandCancelled(Exception):
     """Exception raised when a command is cancelled"""
@@ -72,6 +93,19 @@ class CommandCancelled(Exception):
 
 # Type alias for all possible content types
 ContentType = Union[TextContent, ProgressContent, JsonContent]
+
+def validate_command_input(cmd: str, args: list) -> None:
+    """Validates command and arguments for security and correctness"""
+    if not cmd or not isinstance(cmd, str):
+        raise ValueError("Invalid command")
+    if not isinstance(args, list):
+        raise ValueError("Args must be a list")
+    for arg in args:
+        if not isinstance(arg, str):
+            raise ValueError("All args must be strings")
+        # Basic command injection prevention
+        if any(char in arg for char in [';', '|', '&', '>', '<', '`', '$']):
+            raise ValueError("Invalid characters in command arguments")
 
 def ssh_connect() -> paramiko.SSHClient:
     """Returns an SSH session ready to use, using SSH_* environment variables"""
@@ -85,10 +119,17 @@ def ssh_connect() -> paramiko.SSHClient:
     logger.info(f"Connecting to {ssh_user}@{ssh_host}:{ssh_port}")
 
     try:
+        # Load private key
+        try:
+            with open(PRIVATE_KEY_PATH, "r", encoding="utf-8") as key_file:
+                private_key = key_file.read()
+        except (FileNotFoundError, PermissionError) as e:
+            raise SSHError(f"Failed to read SSH key: {str(e)}", original_error=e)
+
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        pkey = paramiko.RSAKey.from_private_key(io.StringIO(PRIVATE_KEY))
-        
+        pkey = paramiko.RSAKey.from_private_key(io.StringIO(private_key))
+            
         ssh.connect(
             hostname=ssh_host,
             port=ssh_port,
@@ -100,15 +141,15 @@ def ssh_connect() -> paramiko.SSHClient:
         )
         return ssh
     except paramiko.AuthenticationException as exc:
-        raise SSHError("Authentication failed. Check your SSH credentials.") from exc
+        raise SSHError("Authentication failed. Check your SSH credentials.", original_error=exc)
     except paramiko.SSHException as e:
-        raise SSHError(f"SSH error: {str(e)}") from e
+        raise SSHError(f"SSH error: {str(e)}", original_error=e)
     except socket.timeout as exc:
-        raise SSHError(f"Connection timed out after {SSH_TIMEOUT} seconds") from exc
+        raise SSHError(f"Connection timed out after {SSH_TIMEOUT} seconds", original_error=exc)
     except socket.error as e:
-        raise SSHError(f"Network error: {str(e)}") from e
+        raise SSHError(f"Network error: {str(e)}", original_error=e)
     except Exception as e:
-        raise SSHError(f"Unexpected error: {str(e)}") from e
+        raise SSHError(f"Unexpected error: {str(e)}", original_error=e)
 
 async def stream_ssh_command(
     ssh: paramiko.SSHClient, 
@@ -117,6 +158,7 @@ async def stream_ssh_command(
     cancellation_event=None
 ) -> AsyncGenerator[ContentType, None]:
     """Execute a command via SSH and stream its output"""
+    stdin = stdout = stderr = None
     try:
         stdin, stdout, stderr = ssh.exec_command(command, timeout=COMMAND_TIMEOUT)
         start_time = asyncio.get_event_loop().time()
@@ -133,19 +175,22 @@ async def stream_ssh_command(
                 yield TextContent(type="text", text=f"\n[Stream timeout after {STREAM_MAX_TIME} seconds]")
                 break
                 
-            line = stdout.readline()
-            if not line:
-                break
-                
-            bytes_read += len(line)
-            if progress_callback:
-                yield ProgressContent(
-                    type="progress",
-                    progress=min(100, int((bytes_read / STREAM_BUFFER_SIZE) * 100)),
-                    message=f"Bytes read: {bytes_read}"
-                )
-                
-            yield TextContent(type="text", text=line)
+            try:
+                line = stdout.readline(timeout=1.0)  # 1 second timeout for readline
+                if not line:
+                    break
+                    
+                bytes_read += len(line)
+                if progress_callback:
+                    yield ProgressContent(
+                        type="progress",
+                        progress=min(100, int((bytes_read / STREAM_BUFFER_SIZE) * 100)),
+                        message=f"Bytes read: {bytes_read}"
+                    )
+                    
+                yield TextContent(type="text", text=line)
+            except socket.timeout:
+                continue  # Retry readline
         
         # Stream stderr
         while True:
@@ -156,11 +201,14 @@ async def stream_ssh_command(
                 yield TextContent(type="text", text=f"\n[Stream timeout after {STREAM_MAX_TIME} seconds]")
                 break
                 
-            line = stderr.readline()
-            if not line:
-                break
-                
-            yield TextContent(type="text", text=f"[stderr] {line}")
+            try:
+                line = stderr.readline(timeout=1.0)  # 1 second timeout for readline
+                if not line:
+                    break
+                    
+                yield TextContent(type="text", text=f"[stderr] {line}")
+            except socket.timeout:
+                continue  # Retry readline
         
         exit_code = stdout.channel.recv_exit_status()
         duration = asyncio.get_event_loop().time() - start_time
@@ -175,22 +223,39 @@ async def stream_ssh_command(
         yield JsonContent(type="json", data=result.model_dump())
         
     except socket.timeout as exc:
-        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds") from exc
+        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds", original_error=exc)
     except Exception as e:
-        raise SSHError(f"Command execution failed: {str(e)}") from e
+        raise SSHError(f"Command execution failed: {str(e)}", original_error=e)
+    finally:
+        # Clean up resources
+        for stream in (stdin, stdout, stderr):
+            if stream:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
 def execute_ssh_command(ssh: paramiko.SSHClient, command: str) -> Tuple[str, str, int]:
     """Execute a command via SSH with timeout and return (stdout, stderr, exit_code)"""
+    stdin = stdout = stderr = None
     try:
         stdin, stdout, stderr = ssh.exec_command(command, timeout=COMMAND_TIMEOUT)
         exit_code = stdout.channel.recv_exit_status()
-        out = stdout.read().decode()
-        err = stderr.read().decode()
+        out = stdout.read(MAX_OUTPUT_SIZE).decode()
+        err = stderr.read(MAX_OUTPUT_SIZE).decode()
         return out, err, exit_code
     except socket.timeout as exc:
-        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds") from exc
+        raise SSHError(f"Command execution timed out after {COMMAND_TIMEOUT} seconds", original_error=exc)
     except Exception as e:
-        raise SSHError(f"Command execution failed: {str(e)}") from e
+        raise SSHError(f"Command execution failed: {str(e)}", original_error=e)
+    finally:
+        # Clean up resources
+        for stream in (stdin, stdout, stderr):
+            if stream:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
 def list_containers() -> list[str]:
     """Lists running Docker containers using docker ps"""
@@ -288,6 +353,12 @@ async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
             stream = args.get("stream", False)
             structured_output = args.get("structured_output", False)
 
+            try:
+                validate_command_input(cmd, cmd_args)
+            except ValueError as e:
+                yield TextContent(type="text", text=f"Invalid command input: {str(e)}")
+                return
+
             if not cmd:
                 yield TextContent(type="text", text="Command field is required")
                 return
@@ -348,6 +419,12 @@ async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
         stream = args.get("stream", False)
         structured_output = args.get("structured_output", False)
 
+        try:
+            validate_command_input(cmd, cmd_args)
+        except ValueError as e:
+            yield TextContent(type="text", text=f"Invalid command input: {str(e)}")
+            return
+
         if not all([container, cmd]):
             yield TextContent(type="text", text="Both 'container' and 'command' fields are required")
             return
@@ -397,7 +474,10 @@ async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
         yield TextContent(type="text", text=f"Error: {str(e)}")
     finally:
         if ssh:
-            ssh.close()
+            try:
+                ssh.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
 
 async def main():
     """Initializes and runs the MCP server using stdio for communication."""
