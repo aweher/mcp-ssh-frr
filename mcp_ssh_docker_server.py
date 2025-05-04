@@ -333,13 +333,42 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["command"]
             }
+        ),
+        Tool(
+            name="ssh_exec_vtysh",
+            description="Ejecuta comandos vtysh en un contenedor FRR remoto vía SSH y docker exec",
+            version=VERSION,
+            metadata=TOOL_METADATA,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "commands": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Lista de comandos vtysh a ejecutar (se ejecutan en orden)"
+                    },
+                    "container": {
+                        "type": "string",
+                        "description": "Nombre del contenedor FRR"
+                    },
+                    "stream": {
+                        "type": "boolean",
+                        "description": "Si es true, streamea la salida en tiempo real"
+                    },
+                    "structured_output": {
+                        "type": "boolean",
+                        "description": "Si es true, retorna la salida en formato JSON estructurado"
+                    }
+                },
+                "required": ["commands", "container"]
+            }
         )
     ]
 
 @app.call_tool()
 async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
     """Executes the specified tool with given arguments and yields content as it becomes available."""
-    if name not in ["ssh_exec", "ssh_exec_docker"]:
+    if name not in ["ssh_exec", "ssh_exec_docker", "ssh_exec_vtysh"]:
         yield TextContent(type="text", text=f"Unsupported tool: {name}")
         return
 
@@ -347,6 +376,68 @@ async def call_tool(name: str, args: dict) -> AsyncGenerator[ContentType, None]:
     cancellation_event = asyncio.Event()
     
     try:
+        if name == "ssh_exec_vtysh":
+            commands = args.get("commands", [])
+            container = args.get("container")
+            stream = args.get("stream", False)
+            structured_output = args.get("structured_output", False)
+
+            if not commands or not container:
+                yield TextContent(type="text", text="Se requieren los campos 'commands' y 'container'")
+                return
+
+            # Validación básica
+            for cmd in commands:
+                if not isinstance(cmd, str):
+                    yield TextContent(type="text", text="Todos los comandos deben ser strings")
+                    return
+
+            ssh = ssh_connect()
+            # Construir el comando vtysh
+            # Si es un solo comando, usar -c; si son varios, usar -b y pasar un script
+            if len(commands) == 1:
+                vtysh_cmd = f"vtysh -c {shlex.quote(commands[0])}"
+            else:
+                # Crear un script temporal y ejecutarlo con vtysh -b
+                script = "\n".join(commands)
+                # Usar echo + pipe para pasar los comandos a vtysh
+                vtysh_cmd = f"echo {shlex.quote(script)} | vtysh -b"
+
+            final_command = f'docker exec -i {container} bash -c {shlex.quote(vtysh_cmd)}'
+            logger.info(f"Executing: {final_command}")
+
+            if stream:
+                yield TextContent(type="text", text=f"$ {final_command}\n")
+                async for output in stream_ssh_command(
+                    ssh, 
+                    final_command,
+                    progress_callback=True,
+                    cancellation_event=cancellation_event
+                ):
+                    yield output
+                return
+
+            out, err, exit_code = execute_ssh_command(ssh, final_command)
+            
+            if structured_output:
+                result = CommandResult(
+                    command=final_command,
+                    exit_code=exit_code,
+                    stdout=out,
+                    stderr=err,
+                    metadata={"container": container, "vtysh_commands": commands}
+                )
+                yield JsonContent(type="json", data=result.model_dump())
+                return
+            
+            result = f"$ {final_command}\n"
+            result += f"(exit code {exit_code})\n\n"
+            result += out or ""
+            if err:
+                result += f"\n[stderr]\n{err}"
+            yield TextContent(type="text", text=result)
+            return
+
         if name == "ssh_exec":
             cmd = args.get("command")
             cmd_args = args.get("args", [])

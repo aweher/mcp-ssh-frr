@@ -45,11 +45,13 @@ pip install -r requirements.txt
 
    - Place your SSH private key in `./config/id_rsa`
    - Set up environment variables:
+
      ```bash
      export SSH_HOST="your-remote-host"
      export SSH_USER="your-username" # Defaults to root
      export SSH_PORT="22"  # Optional, defaults to 22
      ```
+
    - Don't forget to add your pubkey into `authorized_keys` file on `your-remote-host`
 
 ## Usage
@@ -96,6 +98,7 @@ Execute commands inside Docker containers:
 ```
 
 List available containers:
+
 ```python
 {
     "name": "ssh_exec_docker",
