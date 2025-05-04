@@ -112,6 +112,7 @@ def ssh_connect() -> paramiko.SSHClient:
     ssh_host = os.getenv("SSH_HOST")
     ssh_user = os.getenv("SSH_USER", 'root')
     ssh_port = int(os.getenv("SSH_PORT", "22"))
+    ssh_keyfile = os.getenv("SSH_KEYFILE", "/config/id_rsa")
 
     if not ssh_host or not ssh_user:
         raise SSHError("Missing SSH_HOST or SSH_USER environment variables")
@@ -121,10 +122,10 @@ def ssh_connect() -> paramiko.SSHClient:
     try:
         # Load private key
         try:
-            with open(PRIVATE_KEY_PATH, "r", encoding="utf-8") as key_file:
+            with open(ssh_keyfile, "r", encoding="utf-8") as key_file:
                 private_key = key_file.read()
         except (FileNotFoundError, PermissionError) as e:
-            raise SSHError(f"Failed to read SSH key: {str(e)}", original_error=e)
+            raise SSHError(f"Failed to read SSH key from {ssh_keyfile}: {str(e)}", original_error=e)
 
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
