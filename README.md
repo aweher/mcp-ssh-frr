@@ -21,6 +21,14 @@ A Message Control Protocol (MCP) server that provides SSH and Docker command exe
 
 ## Installation
 
+### Using pip
+
+```bash
+pip install mcp-ssh-frr
+```
+
+### From source
+
 1. Clone the repository:
 
 ```bash
@@ -39,6 +47,12 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 ```bash
 pip install -r requirements.txt
+```
+
+4. Install the package in development mode:
+
+```bash
+pip install -e .
 ```
 
 4. Configure SSH:
