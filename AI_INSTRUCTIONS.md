@@ -13,6 +13,57 @@ This tool provides remote command execution capabilities via SSH, with special s
 2. SSH Key:
    - Private key must be present at `./config/id_rsa`
 
+## Request Structure
+
+All requests must follow this structure:
+
+```json
+{
+    "name": "tool_name",
+    "args": {
+        // tool-specific arguments
+    }
+}
+```
+
+### Common Errors
+
+1. Missing request structure:
+```json
+// Incorrect
+{
+    "list_containers": true
+}
+
+// Correct
+{
+    "name": "ssh_exec_docker",
+    "args": {
+        "list_containers": true
+    }
+}
+```
+
+2. Missing required fields:
+```json
+// Incorrect
+{
+    "name": "ssh_exec_docker",
+    "args": {
+        "command": "ls"
+    }
+}
+
+// Correct
+{
+    "name": "ssh_exec_docker",
+    "args": {
+        "container": "my-container",
+        "command": "ls"
+    }
+}
+```
+
 ## Available Tools
 
 ### 1. ssh_exec
@@ -28,7 +79,7 @@ Purpose: Execute commands directly on the remote system via SSH.
 
 #### Example Usage:
 
-```python
+```json
 # Basic command execution
 {
     "name": "ssh_exec",
@@ -74,7 +125,7 @@ Purpose: Execute commands inside Docker containers on the remote system.
 
 #### Example Usage:
 
-```python
+```json
 # List available containers
 {
     "name": "ssh_exec_docker",
@@ -111,7 +162,7 @@ The tool returns different content types:
 
 1. `TextContent`:
 
-```python
+```json
 {
     "type": "text",
     "text": "command output here"
@@ -120,7 +171,7 @@ The tool returns different content types:
 
 2. `ProgressContent` (for streaming):
 
-```python
+```json
 {
     "type": "progress",
     "progress": 50,
@@ -130,7 +181,7 @@ The tool returns different content types:
 
 3. `JsonContent` (for structured output):
 
-```python
+```json
 {
     "type": "json",
     "data": {
@@ -143,6 +194,37 @@ The tool returns different content types:
     }
 }
 ```
+
+4. `ErrorContent`:
+
+```json
+{
+    "type": "text",
+    "text": "Error: [error message]"
+}
+```
+
+## Error Messages
+
+The server provides clear error messages for common issues:
+
+1. Invalid request structure:
+   - "Error: 'args' debe ser un objeto/diccionario"
+   - "Error: Herramienta no soportada: [tool_name]"
+
+2. Missing required fields:
+   - "Error: Command field is required"
+   - "Error: Both 'container' and 'command' fields are required"
+   - "Error: Se requieren los campos 'commands' y 'container'"
+
+3. Invalid input:
+   - "Error: Invalid command input: [details]"
+   - "Error: Todos los comandos deben ser strings"
+
+4. Execution errors:
+   - "Error: SSH Error: [details]"
+   - "Error: Command cancelled: [details]"
+   - "Error: Error listing containers: [details]"
 
 ## Important Limitations
 
@@ -169,6 +251,8 @@ The tool returns different content types:
 4. Use structured output for programmatic processing
 5. Implement proper error handling for SSH and command execution failures
 6. Close SSH connections after use (handled automatically by the tool)
+7. Always use the correct request structure with `name` and `args` fields
+8. Validate all required fields before sending requests
 
 ## Security Considerations
 
@@ -180,27 +264,47 @@ The tool returns different content types:
 
 ## Error Handling Examples
 
-### SSH Connection Errors
+### Request Structure Errors
 
-```python
-try:
-    # SSH command execution
-    result = await ssh_exec(...)
-except SSHError as e:
-    # Handle SSH-specific errors
-    print(f"SSH Error: {str(e)}")
-except Exception as e:
-    # Handle other errors
-    print(f"Unexpected error: {str(e)}")
+```json
+// Incorrect request
+{
+    "list_containers": true
+}
+
+// Error response
+{
+    "type": "text",
+    "text": "Error: 'args' debe ser un objeto/diccionario"
+}
 ```
 
-### Command Execution Errors
+### Missing Required Fields
 
-```python
-# Check exit code in structured output
-if result["data"]["exit_code"] != 0:
-    print(f"Command failed with exit code {result['data']['exit_code']}")
-    print(f"Error: {result['data']['stderr']}")
+```json
+// Incorrect request
+{
+    "name": "ssh_exec_docker",
+    "args": {
+        "command": "ls"
+    }
+}
+
+// Error response
+{
+    "type": "text",
+    "text": "Error: Both 'container' and 'command' fields are required"
+}
+```
+
+### SSH Connection Errors
+
+```json
+// Error response
+{
+    "type": "text",
+    "text": "Error: SSH Error: Connection timed out after 10 seconds"
+}
 ```
 
 ## Common Use Cases
@@ -243,6 +347,7 @@ if result["data"]["exit_code"] != 0:
         "stream": true
     }
 }
+```
 
 4. **Get Router RIB**
 
@@ -259,17 +364,22 @@ if result["data"]["exit_code"] != 0:
 
 ## Troubleshooting Guide
 
-1. **Connection Issues**
+1. **Request Structure Issues**
+   - Verify request has both `name` and `args` fields
+   - Check that `args` is an object/dictionary
+   - Ensure all required fields are present
+
+2. **Connection Issues**
    - Verify SSH_HOST and SSH_USER environment variables
    - Check SSH key permissions
    - Ensure network connectivity to target host
 
-2. **Command Execution Issues**
+3. **Command Execution Issues**
    - Verify command syntax
    - Check user permissions
    - Review command timeout settings
 
-3. **Container Issues**
+4. **Container Issues**
    - Verify container exists and is running
    - Check container permissions
    - Review Docker daemon status

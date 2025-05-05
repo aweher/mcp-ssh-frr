@@ -85,19 +85,21 @@ def test_ssh_connect_auth_failure(mock_env_vars, mock_ssh_client):
         with pytest.raises(SSHError, match="Authentication failed"):
             ssh_connect()
 
-def test_execute_ssh_command_success(mock_ssh_client, mock_stdout, mock_stderr):
+@pytest.mark.asyncio
+async def test_execute_ssh_command_success(mock_ssh_client, mock_stdout, mock_stderr):
     """Test successful command execution."""
     mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
-    out, err, exit_code = execute_ssh_command(mock_ssh_client, MOCK_COMMAND)
+    out, err, exit_code = await execute_ssh_command(mock_ssh_client, MOCK_COMMAND)
     assert out == "test output"
     assert err == ""
     assert exit_code == 0
 
-def test_execute_ssh_command_timeout(mock_ssh_client):
+@pytest.mark.asyncio
+async def test_execute_ssh_command_timeout(mock_ssh_client):
     """Test command execution timeout."""
     mock_ssh_client.exec_command.side_effect = socket.timeout()
     with pytest.raises(SSHError, match="Command execution timed out"):
-        execute_ssh_command(mock_ssh_client, MOCK_COMMAND)
+        await execute_ssh_command(mock_ssh_client, MOCK_COMMAND)
 
 @pytest.mark.asyncio
 async def test_stream_ssh_command_success(mock_ssh_client, mock_stdout, mock_stderr):
@@ -121,16 +123,18 @@ async def test_stream_ssh_command_cancellation(mock_ssh_client, mock_stdout, moc
         ):
             pass
 
-def test_list_containers_success(mock_ssh_client, mock_stdout, mock_stderr):
+@pytest.mark.asyncio
+async def test_list_containers_success(mock_ssh_client, mock_stdout, mock_stderr):
     """Test successful container listing."""
     mock_stdout.read.return_value = b"container1\ncontainer2\n"
     mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
     
     with patch('mcp_ssh_docker_server.ssh_connect', return_value=mock_ssh_client):
-        containers = list_containers()
+        containers = await list_containers()
         assert containers == ["container1", "container2"]
 
-def test_list_containers_failure(mock_ssh_client, mock_stdout, mock_stderr):
+@pytest.mark.asyncio
+async def test_list_containers_failure(mock_ssh_client, mock_stdout, mock_stderr):
     """Test container listing failure."""
     mock_stderr.read.return_value = b"Error listing containers"
     mock_ssh_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
@@ -138,7 +142,7 @@ def test_list_containers_failure(mock_ssh_client, mock_stdout, mock_stderr):
     
     with patch('mcp_ssh_docker_server.ssh_connect', return_value=mock_ssh_client):
         with pytest.raises(SSHError, match="Failed to list containers"):
-            list_containers()
+            await list_containers()
 
 @pytest.mark.asyncio
 async def test_call_tool_unsupported():
